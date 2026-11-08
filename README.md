@@ -42,7 +42,8 @@
 
 ### 未解决
 
-- **传送后卡死**（2026-11-08 定位）：传送到自定义模型密集的地点时，渲染线程阻塞在模型加载/上传上，**进程存活、声音继续播**。已调整 `stream.ini` 模型池（13.2 MB → 195 MB）与 `fpslimit`（90 → 60），效果待验证。见[附录 L](docs/issue-hang-teleport.md)。
+- **传送后卡死**（2026-11-08 定位并缓解）：传送到自定义模型密集的地点时，渲染线程阻塞在模型加载/上传上，**进程存活、声音继续播**。已把 `stream.ini` 模型池从 13.2 MB 调到 **683.6 MB**、`fpslimit` 降到 60，传送加载明显变快并稳定。见[附录 L](docs/issue-hang-teleport.md)。
+- **复杂场景卡顿**（服务器自定义地图密集处）：**无解**。服务器的 `CreateObject` 不受客户端绘制距离控制，每帧几百次 draw call 全要过 `D3D9 → d3dmetal → Metal` 两层翻译，是 CPU 瓶颈。降分辨率、降绘制距离、加内存池均无效；独占全屏在 d3dmetal 下进不去游戏（[附录 L](docs/issue-hang-teleport.md)）。**结论：接受现状。**
 - **特效密集场景会周期性卡顿**（多人同时开火、爆炸、大量粒子等）。画质已压到最低仍卡，瓶颈在 Wine CPU 侧指令翻译；换 DXVK 直接崩溃（[附录 H](docs/attempt-dxvk.md)）。**结论：接受现状，不再尝试。**
   - ⚠️ 这是 0.3.7-R3 时期的结论；换成 0.3.DL-R1 后**尚未系统验证**卡顿是否改善。
 - **偶发静默闪退**：进程直接消失，无对话框、无崩溃报告、无 `DiagnosticReports`。无已知修复方法，见[附录 G](docs/issue-silent-exit.md)。
@@ -191,22 +192,23 @@ fontsize=1
 游戏目录下的 `stream.ini` 控制**模型数据常驻池**的大小。传送卡死就是在这一层，2026-11-08 已从原版默认值调大：
 
 ```ini
-memory		200000
-devkit_memory	200000
+memory		700000
+devkit_memory	700000
 ```
 
 **单位是 KB**（反汇编 `gta_sa.exe` 的解析代码在 `0x005BCD44`，`shll $0xa` 即 ×1024）：
 
-| 值 | 实际 |
-|---|---|
-| 13500（原版） | 13.2 MB |
-| 200000（当前） | 195.3 MB |
+| 值 | 实际 | 结果 |
+|---|---|---|
+| 13500（原版） | 13.2 MB | 传送后卡死 |
+| 200000 | 195.3 MB | 传送加载明显变快（首个有效档） |
+| **700000（当前）** | **683.6 MB** | 稳定，定为最终值 |
 
 ⚠️ **两个参数写入同一个全局变量（`0x8a5a80`），`devkit_memory` 会覆盖 `memory`**——只改一个等于白改，必须两个一起改。
 
-上限受 32 位地址空间约束：`gta_sa.exe` / `samp.exe` 均为 `PE32` 且 `LARGE_ADDRESS_AWARE = NO`，只有 2 GB。195 MB 的池子加上纹理、音频、Wine 自身映射后约 700–850 MB，仍有余量。要再往上必须先开大地址。
+上限受 32 位地址空间约束：`gta_sa.exe` / `samp.exe` 均为 `PE32` 且 `LARGE_ADDRESS_AWARE = NO`，只有 2 GB。683.6 MB 的池子加上纹理、音频、Wine 自身映射后约 **1259 MB（61%）**，剩约 789 MB。再往上（1000000 ≈ 977 MB / 76%）风险明显增加，且地址空间是**碎片化**的，越大的连续块越难分配。
 
-> 注意：池子大只解决「去过又离开的地方回来时不用重读」。传送目的地若从未去过，模型仍需现读现解码。真正压住卡死的是**降低绘制距离**。完整分析见[附录 L](docs/issue-hang-teleport.md)。
+> 注意：池子大只解决「去过又离开的地方回来时不用重读」。传送目的地若从未去过，模型仍需现读现解码。它**不能**改善复杂场景的渲染卡顿（见[附录 L](docs/issue-hang-teleport.md)）。
 
 ## 4. 公告牌中文方块：已由 0.3.DL-R1 解决
 
@@ -337,7 +339,7 @@ devkit_memory	200000
 | `scripts/III.VC.SA.WindowedMode.asi` | 窗口化插件，3,232,600 字节 | SHA-256 `8b2485e89761044f56bbd4e2fa882ec9667939edf542fde682e016bd7e9373a9` |
 | `scripts/III.VC.SA.WindowedMode.cfg` | 窗口化设置 | `WindowMode=2`（Borderless） |
 | `~/Documents/GTA San Andreas User Files/SAMP/sa-mp.cfg` | 聊天字体 / 帧率 / 音频代理 | 见 3.3 |
-| 游戏根目录 `stream.ini` | 模型数据常驻池，`memory` / `devkit_memory` = `200000`（KB ≈ 195 MB） | 见 3.5；原版备份 `stream.ini.bak-20261108-185753` |
+| 游戏根目录 `stream.ini` | 模型数据常驻池，`memory` / `devkit_memory` = `700000`（KB ≈ 684 MB） | 见 3.5；原版备份 `stream.ini.bak-20261108-185753` |
 | `~/Library/.../Bottles/samp/user.reg` | `d3d9=native,builtin` 覆盖 | 见 3.1 |
 | `C:\GTA` | 指向中文游戏目录的链接 | — |
 
@@ -442,14 +444,14 @@ shasum -a 256 gta_sa.exe
 **游戏卡住不动 / 进程还在但画面冻住**
 
 - 这是 hang，不是崩溃：日志停止增长，进程存活。按 `Ctrl+C` 结束，或 `killall -9 gta_sa.exe samp.exe wineserver`。
-- **如果声音还在播**，说明是渲染线程被模型加载阻塞，典型触发是**传送**。见[附录 L](docs/issue-hang-teleport.md)，已把 `stream.ini` 模型池调到 195 MB、`fpslimit` 降到 60。
+- **如果声音还在播**，说明是渲染线程被模型加载阻塞，典型触发是**传送**。见[附录 L](docs/issue-hang-teleport.md)，已把 `stream.ini` 模型池调到 684 MB、`fpslimit` 降到 60。
 - 其他情况见[附录 F](docs/issue-hang.md)。
 
 **一传送就卡死**
 
-- 先确认是不是**自定义地图密集**的地点（这台服务器有 559 个自定义模型）。
-- 能立刻见效的是**降低绘制距离**（`Options → Display Setup → Draw Distance`），它直接减少一次要加载的模型数量。
+- 调大 `stream.ini` 的 `memory` / `devkit_memory`（当前 `700000` ≈ 684 MB，见 §3.5）。实测从 13.2 MB 调到 195 MB 时传送加载就明显变快。
 - 把 SA-MP 收藏从域名 `ds.zycdjz1.com:7777` 改成固定 IP **`154.12.58.112:7777`**：0.3.DL 的模型缓存按 IP 分目录，域名轮询到不同节点会**重新下载 167 MB**。
+- ⚠️ **降低绘制距离没用**——它只控制原版地图模型，服务器用 `CreateObject` 建的自定义地图不受客户端控制。
 - 完整分析见[附录 L](docs/issue-hang-teleport.md)。
 
 ## 附录索引
