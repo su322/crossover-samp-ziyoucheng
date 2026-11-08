@@ -27,7 +27,7 @@
 - [7. 文件与配置清单](#7-文件与配置清单)
 - [8. 回滚](#8-回滚)
 - [9. 常见问题](#9-常见问题)
-- **附录 A–K** → 已拆为 `docs/` 下的独立文件，见文末 [附录索引](#附录索引)
+- **附录 A–L** → 已拆为 `docs/` 下的独立文件，见文末 [附录索引](#附录索引)
 
 ## 1. 当前状态
 
@@ -42,9 +42,10 @@
 
 ### 未解决
 
+- **传送后卡死**（2026-11-08 定位）：传送到自定义模型密集的地点时，渲染线程阻塞在模型加载/上传上，**进程存活、声音继续播**。已调整 `stream.ini` 模型池（13.2 MB → 195 MB）与 `fpslimit`（90 → 60），效果待验证。见[附录 L](docs/issue-hang-teleport.md)。
 - **特效密集场景会周期性卡顿**（多人同时开火、爆炸、大量粒子等）。画质已压到最低仍卡，瓶颈在 Wine CPU 侧指令翻译；换 DXVK 直接崩溃（[附录 H](docs/attempt-dxvk.md)）。**结论：接受现状，不再尝试。**
   - ⚠️ 这是 0.3.7-R3 时期的结论；换成 0.3.DL-R1 后**尚未系统验证**卡顿是否改善。
-- **偶发卡死 / 闪退**：表现为进程存活但画面冻结（日志停止增长），或进程直接消失。无已知修复方法，见[附录 F](docs/issue-hang.md) / [G](docs/issue-silent-exit.md)。
+- **偶发静默闪退**：进程直接消失，无对话框、无崩溃报告、无 `DiagnosticReports`。无已知修复方法，见[附录 G](docs/issue-silent-exit.md)。
 
 ### 崩溃补丁状态
 
@@ -66,7 +67,7 @@
 | 服务器        | `★Drift Star★自由城1`，`ds.zycdjz1.com:7777`                                                                   |
 | 实际连接       | 域名解析到 **4 台轮询**：`154.12.58.26` / `.56` / `.112`、`45.158.21.28`，每次不一定相同，见[附录 J](docs/issue-player-count.md) |
 | 显示         | 2560×1664 Retina；逻辑分辨率 1280×832                                                                            |
-| 游戏窗口       | 无边框 1280×832；`fpslimit=90`，实际帧率随场景变化                                                                       |
+| 游戏窗口       | 无边框 1280×832；`fpslimit=60`（2026-11-08 由 90 下调），实际帧率随场景变化                                                       |
 
 游戏目录（macOS）：
 
@@ -163,15 +164,17 @@ CrossOver 会自动把 macOS 的系统字体注册进容器，本机的 `Arial U
 当前 `~/Documents/GTA San Andreas User Files/SAMP/sa-mp.cfg` 内容：
 
 ```ini
-fpslimit=90
+fpslimit=60
 multicore=1
-audioproxyoff=0
+audioproxyoff=1
 fontface="Arial Unicode MS"
 fontweight=1
 fontsize=1
 ```
 
 `fontface` / `fontweight` / `fontsize` 三行负责聊天区中文。修改后重新进入服务器即可看到中文。SA-MP 退出时会重写该文件，但已验证这三行会保留。
+
+> `fpslimit` 和 `audioproxyoff` 是 2026-11-08 为缓解卡死调整的，与字体无关，见 §3.5 和[附录 L](docs/issue-hang-teleport.md)。
 
 > 这一节只解决**聊天区**。公告牌不走 SA-MP 的聊天字体，它的问题已在 §4 通过换版本解决。
 
@@ -182,6 +185,28 @@ fontsize=1
 - 建立 `C:\GTA` → 中文目录的链接；
 - 两个启动项的 `.lnk` 目标改为 `C:\GTA\samp.exe`，工作目录设为 `C:\GTA`；
 - CrossOver 里的两个入口都保留，名称未改。
+
+### 3.5 流式加载内存池：`stream.ini`
+
+游戏目录下的 `stream.ini` 控制**模型数据常驻池**的大小。传送卡死就是在这一层，2026-11-08 已从原版默认值调大：
+
+```ini
+memory		200000
+devkit_memory	200000
+```
+
+**单位是 KB**（反汇编 `gta_sa.exe` 的解析代码在 `0x005BCD44`，`shll $0xa` 即 ×1024）：
+
+| 值 | 实际 |
+|---|---|
+| 13500（原版） | 13.2 MB |
+| 200000（当前） | 195.3 MB |
+
+⚠️ **两个参数写入同一个全局变量（`0x8a5a80`），`devkit_memory` 会覆盖 `memory`**——只改一个等于白改，必须两个一起改。
+
+上限受 32 位地址空间约束：`gta_sa.exe` / `samp.exe` 均为 `PE32` 且 `LARGE_ADDRESS_AWARE = NO`，只有 2 GB。195 MB 的池子加上纹理、音频、Wine 自身映射后约 700–850 MB，仍有余量。要再往上必须先开大地址。
+
+> 注意：池子大只解决「去过又离开的地方回来时不用重读」。传送目的地若从未去过，模型仍需现读现解码。真正压住卡死的是**降低绘制距离**。完整分析见[附录 L](docs/issue-hang-teleport.md)。
 
 ## 4. 公告牌中文方块：已由 0.3.DL-R1 解决
 
@@ -311,7 +336,8 @@ fontsize=1
 | 游戏根目录 `gta_sa.exe.orig` | 打补丁前的原版备份，回滚用 | SHA-256 `a559aa772fd136379155efa71f00c47aad34bbfeae6196b0fe1047d0645cbd26` |
 | `scripts/III.VC.SA.WindowedMode.asi` | 窗口化插件，3,232,600 字节 | SHA-256 `8b2485e89761044f56bbd4e2fa882ec9667939edf542fde682e016bd7e9373a9` |
 | `scripts/III.VC.SA.WindowedMode.cfg` | 窗口化设置 | `WindowMode=2`（Borderless） |
-| `~/Documents/GTA San Andreas User Files/SAMP/sa-mp.cfg` | 聊天字体 / 帧率设置 | 见 3.3 |
+| `~/Documents/GTA San Andreas User Files/SAMP/sa-mp.cfg` | 聊天字体 / 帧率 / 音频代理 | 见 3.3 |
+| 游戏根目录 `stream.ini` | 模型数据常驻池，`memory` / `devkit_memory` = `200000`（KB ≈ 195 MB） | 见 3.5；原版备份 `stream.ini.bak-20261108-185753` |
 | `~/Library/.../Bottles/samp/user.reg` | `d3d9=native,builtin` 覆盖 | 见 3.1 |
 | `C:\GTA` | 指向中文游戏目录的链接 | — |
 
@@ -366,6 +392,14 @@ shasum -a 256 gta_sa.exe
 ```
 
 6. **回退联机端版本**（仅在 0.3.DL-R1 出问题时）：重装 0.3.7-R3 的 `samp.dll` / `samp.exe`，但**公告牌方块会回来**。
+7. **撤销卡死调优**（2026-11-08 的三项）：把 `stream.ini` 的 `memory` / `devkit_memory` 改回 `13500`，或直接用原版备份覆盖：
+
+   ```
+   cd "~/Library/Application Support/CrossOver/Bottles/samp/drive_c/Program Files (x86)/侠盗车手：圣安地列斯"
+   cp -p stream.ini.bak-20261108-185753 stream.ini
+   ```
+
+   同时把 `sa-mp.cfg` 的 `fpslimit` 改回 `90`、`audioproxyoff` 改回 `0`（或直接恢复 `sa-mp.cfg.bak-20261108-185520`）。
 
 > 直接编辑 `system.reg` 只在**没有 wine 进程**时有效；有进程在跑时 wineserver 会用内存整份回写覆盖。要热改请走 `reg add` / `reg import`。
 
@@ -408,7 +442,15 @@ shasum -a 256 gta_sa.exe
 **游戏卡住不动 / 进程还在但画面冻住**
 
 - 这是 hang，不是崩溃：日志停止增长，进程存活。按 `Ctrl+C` 结束，或 `killall -9 gta_sa.exe samp.exe wineserver`。
-- 无已知修复方法，见[附录 F](docs/issue-hang.md)。
+- **如果声音还在播**，说明是渲染线程被模型加载阻塞，典型触发是**传送**。见[附录 L](docs/issue-hang-teleport.md)，已把 `stream.ini` 模型池调到 195 MB、`fpslimit` 降到 60。
+- 其他情况见[附录 F](docs/issue-hang.md)。
+
+**一传送就卡死**
+
+- 先确认是不是**自定义地图密集**的地点（这台服务器有 559 个自定义模型）。
+- 能立刻见效的是**降低绘制距离**（`Options → Display Setup → Draw Distance`），它直接减少一次要加载的模型数量。
+- 把 SA-MP 收藏从域名 `ds.zycdjz1.com:7777` 改成固定 IP **`154.12.58.112:7777`**：0.3.DL 的模型缓存按 IP 分目录，域名轮询到不同节点会**重新下载 167 MB**。
+- 完整分析见[附录 L](docs/issue-hang-teleport.md)。
 
 ## 附录索引
 
@@ -419,11 +461,12 @@ shasum -a 256 gta_sa.exe
 | A–C | d3d9 代理：原理 / 源码 / 编译 | ✅ 生效中 | [`d3d9-proxy.md`](docs/d3d9-proxy.md) |
 | D | `0x007324B6` 崩溃与 5 字节补丁 | ⏸ 补丁**未安装** | [`patch-0x007324B6.md`](docs/patch-0x007324B6.md) |
 | E | `0x0053388E` 路牌空指针补丁 | ✅ **已安装** | [`patch-0x0053388E.md`](docs/patch-0x0053388E.md) |
-| F | 进服后卡死 | ⚠️ 未复现 | [`issue-hang.md`](docs/issue-hang.md) |
+| F | 进服后卡死（早期记录） | ⚠️ 未复现，已被 L 补充 | [`issue-hang.md`](docs/issue-hang.md) |
 | G | 静默闪退 | ⚠️ 未复现 | [`issue-silent-exit.md`](docs/issue-silent-exit.md) |
 | H | 试过 DXVK，不适用 | ❌ 已回滚 | [`attempt-dxvk.md`](docs/attempt-dxvk.md) |
 | I | msync 试验 | ❌ 结论作废 | [`attempt-msync.md`](docs/attempt-msync.md) |
 | J | 人数显示不对 / 骤减 | ✅ 已结案（服务器更新） | [`issue-player-count.md`](docs/issue-player-count.md) |
 | K | 字体映射试验（三批）+ 换 0.3.DL 的结论 | ❌ 已作废 | [`attempt-font-mapping.md`](docs/attempt-font-mapping.md) |
+| L | 传送后卡死 + `stream.ini` 单位与上限 | ⚠️ 调整待验证 | [`issue-hang-teleport.md`](docs/issue-hang-teleport.md) |
 
 > ⚠️ 附录里**部分结论已被推翻**：[附录 I](docs/attempt-msync.md) 整篇作废，[附录 J](docs/issue-player-count.md) 的 J.1–J.5 含被推翻的推理，[附录 K](docs/attempt-font-mapping.md) 是完整踩坑记录。正文（§1–§9）才是当前有效结论。
